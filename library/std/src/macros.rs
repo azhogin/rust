@@ -135,6 +135,7 @@ macro_rules! print {
 #[stable(feature = "rust1", since = "1.0.0")]
 #[cfg_attr(not(test), rustc_diagnostic_item = "println_macro")]
 #[allow_internal_unstable(print_internals, format_args_nl)]
+#[collapse_debuginfo]
 macro_rules! println {
     () => {
         $crate::print!("\n")

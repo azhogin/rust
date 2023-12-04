@@ -272,6 +272,7 @@
 #![feature(c_unwind)]
 #![feature(cfg_target_thread_local)]
 #![feature(cfi_encoding)]
+#![feature(collapse_debuginfo)]
 #![feature(concat_idents)]
 #![feature(const_mut_refs)]
 #![feature(const_trait_impl)]

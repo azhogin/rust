@@ -1,12 +1,12 @@
-// run-pass
-// check-run-results
+//@ run-pass
+//@ check-run-results
 // Future `bar` with internal async drop `Foo` will have async drop itself.
 // And we trying to drop this future in sync context (`block_on` func)
 
 #![feature(async_drop)]
 #![allow(incomplete_features)]
 
-// edition: 2021
+//@ edition: 2021
 
 use std::mem::ManuallyDrop;
 

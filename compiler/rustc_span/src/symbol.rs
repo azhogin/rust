@@ -747,7 +747,6 @@ symbols! {
         dreg_low8,
         drop,
         drop_in_place,
-        drop_in_place_future,
         drop_types_in_const,
         dropck_eyepatch,
         dropck_parametricity,

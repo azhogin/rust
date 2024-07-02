@@ -68,7 +68,7 @@ impl<'tcx> MirPass<'tcx> for Inline {
 }
 
 fn inline<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> bool {
-    let def_id = body.source.def_id().expect_local();
+    let def_id = body.source.def_id().expect_local_or_templated(|v| tcx.is_templated_coroutine(v));
 
     // Only do inlining into fn bodies.
     if !tcx.hir().body_owner_kind(def_id).is_fn_or_closure() {

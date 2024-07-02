@@ -59,18 +59,6 @@ where
     future_drop_poll(fut, cx)
 }
 
-#[cfg(not(bootstrap))]
-#[unstable(feature = "async_drop", issue = "126482")]
-#[cfg(all(not(no_global_oom_handling), not(test)))]
-#[lang = "drop_in_place_future"]
-fn drop_in_place_future<F>(_to_drop: *mut F)
-where
-    F: Future,
-{
-    // FIXME: Support poll loop for async drop of future (future_drop_poll)
-    panic!("Unimplemented drop_in_place_future");
-}
-
 /// Async drop.
 #[cfg(not(bootstrap))]
 #[unstable(feature = "async_drop", issue = "126482")]

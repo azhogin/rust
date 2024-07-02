@@ -1,12 +1,12 @@
-// run-pass
-// check-run-results
+//@ run-pass
+//@ check-run-results
 // Test async drop of coroutine `bar` (with internal async drop),
 // stopped at the middle of execution, with AsyncDrop object Foo active.
 
 #![feature(async_drop)]
 #![allow(incomplete_features)]
 
-// edition: 2021
+//@ edition: 2021
 
 use std::mem::ManuallyDrop;
 

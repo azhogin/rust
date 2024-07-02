@@ -1,5 +1,5 @@
-// run-pass
-// check-run-results
+//@ run-pass
+//@ check-run-results
 // struct `Foo` has both sync and async drop.
 // Struct `Complex` contains three `Foo` fields and has complex async drop glue.
 
@@ -8,7 +8,7 @@
 
 use std::mem::ManuallyDrop;
 
-// edition: 2021
+//@ edition: 2021
 
 #[inline(never)]
 fn myprintln(msg: &str, my_resource_handle: usize) {

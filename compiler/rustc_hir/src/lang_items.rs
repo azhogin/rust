@@ -302,7 +302,6 @@ language_item_table! {
 
     ExchangeMalloc,          sym::exchange_malloc,     exchange_malloc_fn,         Target::Fn,             GenericRequirement::None;
     DropInPlace,             sym::drop_in_place,       drop_in_place_fn,           Target::Fn,             GenericRequirement::Minimum(1);
-    DropInPlaceFuture,       sym::drop_in_place_future,drop_in_place_future_fn,    Target::Fn,             GenericRequirement::Exact(1);
     AllocLayout,             sym::alloc_layout,        alloc_layout,               Target::Struct,         GenericRequirement::None;
 
     Start,                   sym::start,               start_fn,                   Target::Fn,             GenericRequirement::Exact(1);

@@ -40,9 +40,14 @@ fn resolve_instance<'tcx>(
             if ty.needs_drop(tcx, param_env) {
                 debug!(" => nontrivial drop glue");
                 match *ty.kind() {
-                    ty::Coroutine(..) => {
+                    ty::Coroutine(coroutine_def_id, ..) => {
                         // FIXME: sync drop of coroutine with async drop (generate both versions?)
-                        ty::InstanceKind::DropGlue(def_id, Some(ty))
+                        // Currently just ignored
+                        if tcx.optimized_mir(coroutine_def_id).coroutine_drop_async().is_some() {
+                            ty::InstanceKind::DropGlue(def_id, None)
+                        } else {
+                            ty::InstanceKind::DropGlue(def_id, Some(ty))
+                        }
                     }
                     ty::Closure(..)
                     | ty::CoroutineClosure(..)

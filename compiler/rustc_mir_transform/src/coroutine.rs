@@ -919,13 +919,17 @@ fn has_expandable_async_drops<'tcx>(
         if place_ty == coroutine_ty {
             continue;
         }
-        if async_fut.is_none() {
-            continue;
-        }
-        if let ty::Coroutine(def_id, ..) = place_ty.kind() {
-            if tcx.optimized_mir(def_id).coroutine_drop_async().is_none() {
-                continue;
+        let is_async = async_fut.is_some() || if let ty::Coroutine(def_id, ..) = place_ty.kind() {
+            if tcx.is_templated_coroutine(*def_id)
+                || tcx.optimized_mir(def_id).coroutine_drop_async().is_some()
+            {
+                true
+            } else {
+                false
             }
+        } else { false };
+        if !is_async {
+            continue;
         }
         return true;
     }
@@ -977,7 +981,9 @@ fn expand_async_drops<'tcx>(
         let (fut_local, is_coroutine_drop) = if let Some(fut_local) = async_fut {
             (fut_local, false)
         } else if let ty::Coroutine(def_id, ..) = place_ty.kind() {
-            if tcx.optimized_mir(def_id).coroutine_drop_async().is_some() {
+            if tcx.is_templated_coroutine(*def_id)
+                || tcx.optimized_mir(def_id).coroutine_drop_async().is_some()
+            {
                 // Coroutine is async dropped using its original state struct
                 (place.local, true)
             } else {
@@ -2073,7 +2079,13 @@ fn create_coroutine_resume_function<'tcx>(
         let block = match transform.coroutine_kind {
             CoroutineKind::Desugared(CoroutineDesugaring::Async, _)
             | CoroutineKind::Coroutine(_) => {
-                insert_panic_block(tcx, body, ResumedAfterReturn(transform.coroutine_kind))
+                // For async_drop_in_place<T>::{closure} we just keep return Poll::Ready,
+                // because async drop of such coroutine keeps polling original coroutine
+                if tcx.is_templated_coroutine(body.source.def_id()) {
+                    insert_poll_ready_block(tcx, body)
+                } else {
+                    insert_panic_block(tcx, body, ResumedAfterReturn(transform.coroutine_kind))
+                }
             }
             CoroutineKind::Desugared(CoroutineDesugaring::AsyncGen, _)
             | CoroutineKind::Desugared(CoroutineDesugaring::Gen, _) => {

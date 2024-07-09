@@ -324,6 +324,16 @@ impl<'tcx> Inliner<'tcx> {
                 return Err("still needs substitution");
             }
 
+            InstanceKind::AsyncDropGlue(_, ty)
+            | InstanceKind::AsyncDropGlueCtorShim(_, Some(ty))
+            | InstanceKind::FutureDropPollShim(_, ty) => {
+                return if ty.still_further_specializable() {
+                    Err("still needs substitution")
+                } else {
+                    Ok(())
+                };
+            }
+
             // This cannot result in an immediate cycle since the callee MIR is a shim, which does
             // not get any optimizations run on it. Any subsequent inlining may cause cycles, but we
             // do not need to catch this here, we can wait until the inliner decides to continue
@@ -338,8 +348,6 @@ impl<'tcx> Inliner<'tcx> {
             | InstanceKind::CloneShim(..)
             | InstanceKind::ThreadLocalShim(..)
             | InstanceKind::FnPtrAddrShim(..)
-            | InstanceKind::FutureDropPollShim(..)
-            | InstanceKind::AsyncDropGlue(..)
             | InstanceKind::AsyncDropGlueCtorShim(..) => return Ok(()),
         }
 

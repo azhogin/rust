@@ -41,7 +41,10 @@ where
 {
     core::future::poll_fn(move |cx| {
         assert_eq!(x.as_mut().poll(cx), Poll::Ready(()));
-        assert_eq!(x.as_mut().poll(cx), Poll::Ready(()));
+        // Additional poll removed, because in the new async drop glue implementation
+        // poll-after-completion for async_drop_in_place coroutine produces panic
+        // (the same as for standart coroutines: `async fn` resumed after completion)
+        // assert_eq!(x.as_mut().poll(cx), Poll::Ready(()));
         Poll::Ready(())
     })
 }
@@ -52,7 +55,7 @@ fn main() {
 
     let i = 13;
     let fut = pin!(async {
-        test_async_drop(Int(0), 0).await;
+        test_async_drop(Int(0), 16).await;
         test_async_drop(AsyncInt(0), 104).await;
         test_async_drop([AsyncInt(1), AsyncInt(2)], 152).await;
         test_async_drop((AsyncInt(3), AsyncInt(4)), 488).await;
@@ -87,7 +90,8 @@ fn main() {
         )
         .await;
 
-        let async_drop_fut = pin!(core::future::async_drop(AsyncInt(19)));
+        let ptr = &mut ManuallyDrop::new(AsyncInt(19)) as *mut _;
+        let async_drop_fut = pin!(unsafe { async_drop_in_place(ptr) });
         test_idempotency(async_drop_fut).await;
 
         let foo = AsyncInt(20);

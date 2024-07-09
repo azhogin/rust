@@ -462,6 +462,41 @@ impl<'tcx> fmt::Display for Instance<'tcx> {
     }
 }
 
+// async_drop_in_place<T>::coroutine.poll, when T is a standart coroutine,
+// should be resolved to this coroutine's future_drop_poll.
+// async_drop_in_place<async_drop_in_place<T>::coroutine>::coroutine.poll,
+// when T is a standart coroutine, should be resolved to this coroutine's future_drop_poll.
+// async_drop_in_place<async_drop_in_place<T>::coroutine>::coroutine.poll,
+// when T is not a coroutine, should be resolved to the innermost
+// async_drop_in_place<T>::coroutine's poll function (AsyncDropGlue for T)
+fn resolve_async_drop_poll<'tcx>(tcx: TyCtxt<'tcx>, mut cor_ty: Ty<'tcx>) -> Instance<'tcx> {
+    let async_drop_in_place_poll =
+        tcx.lang_items().async_drop_in_place_poll_fn().unwrap();
+    let mut child_ty = cor_ty;
+    loop {
+        if let ty::Coroutine(child_def, child_args) = child_ty.kind() {
+            cor_ty = child_ty;
+            if *child_def == async_drop_in_place_poll {
+                child_ty = child_args.first().unwrap().expect_ty();
+                continue;
+            } else {
+                return Instance {
+                    def: ty::InstanceKind::FutureDropPollShim(*child_def, cor_ty),
+                    args: child_args,
+                };
+            }
+        } else {
+            let ty::Coroutine(_, child_args) = cor_ty.kind() else {
+                bug!();
+            };
+            return Instance {
+                def: ty::InstanceKind::AsyncDropGlue(async_drop_in_place_poll, cor_ty),
+                args: child_args,
+            };
+        }
+    }
+}
+
 impl<'tcx> Instance<'tcx> {
     pub fn new(def_id: DefId, args: GenericArgsRef<'tcx>) -> Instance<'tcx> {
         assert!(
@@ -770,14 +805,7 @@ impl<'tcx> Instance<'tcx> {
 
         if tcx.lang_items().get(coroutine_callable_item) == Some(trait_item_id) {
             if Some(coroutine_def_id) == tcx.lang_items().async_drop_in_place_poll_fn() {
-                let child_ty = args.first().unwrap().expect_ty();
-                let def = if let ty::Coroutine(child_def, _) = child_ty.kind() {
-                    assert!(!child_ty.is_templated_coroutine(tcx));
-                    ty::InstanceKind::FutureDropPollShim(*child_def, child_ty)
-                } else {
-                    ty::InstanceKind::AsyncDropGlue(coroutine_def_id, rcvr_args.type_at(0))
-                };
-                return Some(Instance { def, args });
+                return Some(resolve_async_drop_poll(tcx, rcvr_args.type_at(0)));
             }
             let ty::Coroutine(_, id_args) = *tcx.type_of(coroutine_def_id).skip_binder().kind()
             else {

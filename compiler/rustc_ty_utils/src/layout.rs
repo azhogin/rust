@@ -112,6 +112,14 @@ fn layout_of_uncached<'tcx>(
     if let Err(guar) = ty.error_reported() {
         return Err(error(cx, LayoutError::ReferencesError(guar)));
     }
+    // layout of `async_drop_in_place<T>::{closure}` in case,
+    // when T is a coroutine, is the layout of this internal coroutine
+    if let ty::Coroutine(cor_def, cor_args) = ty.kind() && cx.tcx.is_templated_coroutine(*cor_def) {
+        let arg_cor_ty = cor_args.first().unwrap().expect_ty();
+        if arg_cor_ty.is_coroutine() {
+            return Ok(cx.layout_of(arg_cor_ty)?.layout);
+        }
+    }
 
     let tcx = cx.tcx;
     let param_env = cx.param_env;
@@ -816,18 +824,10 @@ fn coroutine_layout<'tcx>(
     let tcx = cx.tcx;
     let layout = if tcx.is_templated_coroutine(def_id) {
         // layout of `async_drop_in_place<T>::{closure}` in case,
-        // when T is a coroutine, is the layout of this internal coroutine
-        let arg_cor_ty = args.first().unwrap().expect_ty();
-        if let ty::Coroutine(child_def_id, child_args) = arg_cor_ty.kind() {
-            args = child_args;
-            if tcx.is_templated_coroutine(*child_def_id) {
-                tcx.templated_coroutine_layout(arg_cor_ty)
-            } else {
-                tcx.ordinary_coroutine_layout(*child_def_id, args.as_coroutine().kind_ty())
-            }
-        } else {
-            tcx.templated_coroutine_layout(ty)
-        }
+        // when T is a coroutine, is the layout of this internal coroutine,
+        // and must be proceed above, in layout_of_uncached
+        assert!(!args.first().unwrap().expect_ty().is_coroutine());
+        tcx.templated_coroutine_layout(ty)
     } else {
         tcx.ordinary_coroutine_layout(def_id, args.as_coroutine().kind_ty())
     };

@@ -117,6 +117,14 @@ pub fn build_async_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Ty<'tcx
     let span = tcx.def_span(def_id);
     let source_info = SourceInfo::outermost(span);
 
+    let needs_async_drop = drop_ty.needs_async_drop(tcx, param_env);
+    let needs_sync_drop = !needs_async_drop && drop_ty.needs_drop(tcx, param_env);
+
+    // The first argument (index 0), but add 1 for the return value.
+    let coroutine_layout = Place::from(Local::new(1 + 0));
+    let coroutine_layout_dropee =
+        tcx.mk_place_field(coroutine_layout, FieldIdx::new(0), drop_ptr_ty);
+
     let return_block = BasicBlock::new(1);
     let mut blocks = IndexVec::with_capacity(2);
     let block = |blocks: &mut IndexVec<_, _>, kind| {
@@ -126,7 +134,18 @@ pub fn build_async_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Ty<'tcx
             is_cleanup: false,
         })
     };
-    block(&mut blocks, TerminatorKind::Goto { target: return_block });
+    block(&mut blocks, if needs_sync_drop {
+        TerminatorKind::Drop {
+            place: tcx.mk_place_deref(coroutine_layout_dropee),
+            target: return_block,
+            unwind: UnwindAction::Continue,
+            replace: false,
+            drop: None,
+            async_fut: None
+        }
+    } else {
+        TerminatorKind::Goto { target: return_block }
+    });
     block(&mut blocks, TerminatorKind::Return);
 
     let source = MirSource::from_instance(ty::InstanceKind::AsyncDropGlue(def_id, ty));
@@ -138,15 +157,13 @@ pub fn build_async_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Ty<'tcx
         parent_args.as_coroutine().yield_ty(),
         parent_args.as_coroutine().resume_ty(),
     )));
-    if !drop_ty.needs_async_drop(tcx, param_env) {
-        return body; // Returning noop body for types without `need async drop`
+    if !needs_async_drop {
+        // Returning noop body for types without `need async drop`
+        // (or sync Drop in case of !`need async drop` && `need drop`)
+        return body;
     }
 
-    // The first argument (index 0), but add 1 for the return value.
-    let coroutine_layout = Place::from(Local::new(1 + 0));
     let mut dropee_ptr = Place::from(body.local_decls.push(LocalDecl::new(drop_ptr_ty, span)));
-    let coroutine_layout_dropee =
-        tcx.mk_place_field(coroutine_layout, FieldIdx::new(0), drop_ptr_ty);
     let st_kind = StatementKind::Assign(Box::new((
         dropee_ptr,
         Rvalue::Use(Operand::Move(coroutine_layout_dropee)),

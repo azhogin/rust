@@ -818,7 +818,7 @@ fn coroutine_layout<'tcx>(
     cx: &LayoutCx<'tcx, TyCtxt<'tcx>>,
     ty: Ty<'tcx>,
     def_id: hir::def_id::DefId,
-    mut args: GenericArgsRef<'tcx>,
+    args: GenericArgsRef<'tcx>,
 ) -> Result<Layout<'tcx>, &'tcx LayoutError<'tcx>> {
     use SavedLocalEligibility::*;
     let tcx = cx.tcx;

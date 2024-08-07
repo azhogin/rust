@@ -188,7 +188,7 @@ fn dump_path<'tcx>(
             }));
             s
         }
-        ty::InstanceKind::AsyncDropGlueCtorShim(_, Some(ty)) => {
+        ty::InstanceKind::AsyncDropGlueCtorShim(_, ty) => {
             let mut s = ".".to_owned();
             s.extend(ty.to_string().chars().filter_map(|c| match c {
                 ' ' => None,
@@ -210,9 +210,15 @@ fn dump_path<'tcx>(
             }));
             s
         }
-        ty::InstanceKind::FutureDropPollShim(_, ty) => {
+        ty::InstanceKind::FutureDropPollShim(_, proxy_cor, impl_cor) => {
             let mut s = ".".to_owned();
-            s.extend(ty.to_string().chars().filter_map(|c| match c {
+            s.extend(proxy_cor.to_string().chars().filter_map(|c| match c {
+                ' ' => None,
+                ':' | '<' | '>' => Some('_'),
+                c => Some(c),
+            }));
+            s.push_str(".");
+            s.extend(impl_cor.to_string().chars().filter_map(|c| match c {
                 ' ' => None,
                 ':' | '<' | '>' => Some('_'),
                 c => Some(c),

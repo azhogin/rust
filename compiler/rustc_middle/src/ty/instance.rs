@@ -150,8 +150,8 @@ pub enum InstanceKind<'tcx> {
     /// native support.
     ThreadLocalShim(DefId),
 
-    /// future_drop_poll<T> for async drop of future
-    FutureDropPollShim(DefId, Ty<'tcx>),
+    /// future_drop_poll<T> for async drop of future (def_id, proxy_cor_ty, impl_cor_ty)
+    FutureDropPollShim(DefId, Ty<'tcx>, Ty<'tcx>),
 
     /// `core::ptr::drop_in_place::<T>`.
     ///
@@ -179,9 +179,7 @@ pub enum InstanceKind<'tcx> {
     ///
     /// The `DefId` is for `core::future::async_drop::async_drop_in_place`, the `Ty`
     /// is the type `T`.
-    /// `None` option instead of Ty in case when Ty doesn't need async drop,
-    ///  and the shim effectively means `func returning noop future`.
-    AsyncDropGlueCtorShim(DefId, Option<Ty<'tcx>>),
+    AsyncDropGlueCtorShim(DefId, Ty<'tcx>),
 
     /// `core::future::async_drop::async_drop_in_place::<'_, T>::{closure}`.
     ///
@@ -232,8 +230,8 @@ impl<'tcx> Instance<'tcx> {
                 .and_then(|monos| monos.get(&self.args).cloned()),
             InstanceKind::DropGlue(_, Some(_)) => tcx.upstream_drop_glue_for(self.args),
             InstanceKind::AsyncDropGlue(_, _) => None,
-            InstanceKind::FutureDropPollShim(_, _) => None,
-            InstanceKind::AsyncDropGlueCtorShim(_, Some(_)) => {
+            InstanceKind::FutureDropPollShim(_, _, _) => None,
+            InstanceKind::AsyncDropGlueCtorShim(_, _) => {
                 tcx.upstream_async_drop_glue_for(self.args)
             }
             _ => None,
@@ -261,7 +259,7 @@ impl<'tcx> InstanceKind<'tcx> {
             | InstanceKind::DropGlue(def_id, _)
             | InstanceKind::CloneShim(def_id, _)
             | InstanceKind::FnPtrAddrShim(def_id, _)
-            | InstanceKind::FutureDropPollShim(def_id, _)
+            | InstanceKind::FutureDropPollShim(def_id, _, _)
             | InstanceKind::AsyncDropGlue(def_id, _)
             | InstanceKind::AsyncDropGlueCtorShim(def_id, _) => def_id,
         }
@@ -272,7 +270,7 @@ impl<'tcx> InstanceKind<'tcx> {
         match self {
             ty::InstanceKind::Item(def) => Some(def),
             ty::InstanceKind::DropGlue(def_id, Some(_))
-            | InstanceKind::AsyncDropGlueCtorShim(def_id, Some(_))
+            | InstanceKind::AsyncDropGlueCtorShim(def_id, _)
             | InstanceKind::AsyncDropGlue(def_id, _)
             | InstanceKind::FutureDropPollShim(def_id, ..)
             | InstanceKind::ThreadLocalShim(def_id) => Some(def_id),
@@ -285,7 +283,6 @@ impl<'tcx> InstanceKind<'tcx> {
             | ty::InstanceKind::ConstructCoroutineInClosureShim { .. }
             | ty::InstanceKind::CoroutineKindShim { .. }
             | InstanceKind::DropGlue(..)
-            | InstanceKind::AsyncDropGlueCtorShim(..)
             | InstanceKind::CloneShim(..)
             | InstanceKind::FnPtrAddrShim(..) => None,
         }
@@ -310,8 +307,8 @@ impl<'tcx> InstanceKind<'tcx> {
         let def_id = match *self {
             ty::InstanceKind::Item(def) => def,
             ty::InstanceKind::DropGlue(_, Some(_)) => return false,
-            ty::InstanceKind::AsyncDropGlueCtorShim(_, Some(ty)) => return ty.is_coroutine(),
-            ty::InstanceKind::FutureDropPollShim(_, _) => return false,
+            ty::InstanceKind::AsyncDropGlueCtorShim(_, ty) => return ty.is_coroutine(),
+            ty::InstanceKind::FutureDropPollShim(_, _, _) => return false,
             ty::InstanceKind::AsyncDropGlue(_, _) => return false,
             ty::InstanceKind::ThreadLocalShim(_) => return false,
             _ => return true,
@@ -334,7 +331,7 @@ impl<'tcx> InstanceKind<'tcx> {
             return true;
         }
         if let ty::InstanceKind::DropGlue(.., Some(ty))
-        | ty::InstanceKind::AsyncDropGlueCtorShim(.., Some(ty)) = *self
+        | ty::InstanceKind::AsyncDropGlueCtorShim(.., ty) = *self
         {
             // Drop glue generally wants to be instantiated at every codegen
             // unit, but without an #[inline] hint. We should make this
@@ -391,12 +388,11 @@ impl<'tcx> InstanceKind<'tcx> {
             | InstanceKind::DropGlue(_, Some(_))
             | InstanceKind::FutureDropPollShim(..)
             | InstanceKind::AsyncDropGlue(_, _) => false,
-            InstanceKind::AsyncDropGlueCtorShim(_, Some(_)) => false,
+            InstanceKind::AsyncDropGlueCtorShim(_, _) => false,
             InstanceKind::ClosureOnceShim { .. }
             | InstanceKind::ConstructCoroutineInClosureShim { .. }
             | InstanceKind::CoroutineKindShim { .. }
             | InstanceKind::DropGlue(..)
-            | InstanceKind::AsyncDropGlueCtorShim(..)
             | InstanceKind::Item(_)
             | InstanceKind::Intrinsic(..)
             | InstanceKind::ReifyShim(..)
@@ -441,10 +437,11 @@ fn fmt_instance(
         InstanceKind::DropGlue(_, Some(ty)) => write!(f, " - shim(Some({ty}))"),
         InstanceKind::CloneShim(_, ty) => write!(f, " - shim({ty})"),
         InstanceKind::FnPtrAddrShim(_, ty) => write!(f, " - shim({ty})"),
-        InstanceKind::FutureDropPollShim(_, ty) => write!(f, " - dropshim({ty})"),
+        InstanceKind::FutureDropPollShim(_, proxy_ty, impl_ty) => {
+            write!(f, " - dropshim({proxy_ty}-{impl_ty})")
+        }
         InstanceKind::AsyncDropGlue(_, ty) => write!(f, " - shim({ty})"),
-        InstanceKind::AsyncDropGlueCtorShim(_, None) => write!(f, " - shim(None)"),
-        InstanceKind::AsyncDropGlueCtorShim(_, Some(ty)) => write!(f, " - shim(Some({ty}))"),
+        InstanceKind::AsyncDropGlueCtorShim(_, ty) => write!(f, " - shim(Some({ty}))"),
     }
 }
 
@@ -463,15 +460,18 @@ impl<'tcx> fmt::Display for Instance<'tcx> {
 }
 
 // async_drop_in_place<T>::coroutine.poll, when T is a standart coroutine,
-// should be resolved to this coroutine's future_drop_poll.
+// should be resolved to this coroutine's future_drop_poll (through FutureDropPollShim proxy).
 // async_drop_in_place<async_drop_in_place<T>::coroutine>::coroutine.poll,
 // when T is a standart coroutine, should be resolved to this coroutine's future_drop_poll.
 // async_drop_in_place<async_drop_in_place<T>::coroutine>::coroutine.poll,
 // when T is not a coroutine, should be resolved to the innermost
-// async_drop_in_place<T>::coroutine's poll function (AsyncDropGlue for T)
+// async_drop_in_place<T>::coroutine's poll function (through FutureDropPollShim proxy)
 fn resolve_async_drop_poll<'tcx>(tcx: TyCtxt<'tcx>, mut cor_ty: Ty<'tcx>) -> Instance<'tcx> {
-    let async_drop_in_place_poll =
-        tcx.lang_items().async_drop_in_place_poll_fn().unwrap();
+    let first_cor = cor_ty;
+    let ty::Coroutine(_, proxy_args) = first_cor.kind() else {
+        bug!();
+    };
+    let async_drop_in_place_poll = tcx.lang_items().async_drop_in_place_poll_fn().unwrap();
     let mut child_ty = cor_ty;
     loop {
         if let ty::Coroutine(child_def, child_args) = child_ty.kind() {
@@ -481,18 +481,33 @@ fn resolve_async_drop_poll<'tcx>(tcx: TyCtxt<'tcx>, mut cor_ty: Ty<'tcx>) -> Ins
                 continue;
             } else {
                 return Instance {
-                    def: ty::InstanceKind::FutureDropPollShim(*child_def, cor_ty),
-                    args: child_args,
+                    def: ty::InstanceKind::FutureDropPollShim(
+                        async_drop_in_place_poll,
+                        first_cor,
+                        cor_ty,
+                    ),
+                    args: proxy_args,
                 };
             }
         } else {
             let ty::Coroutine(_, child_args) = cor_ty.kind() else {
                 bug!();
             };
-            return Instance {
-                def: ty::InstanceKind::AsyncDropGlue(async_drop_in_place_poll, cor_ty),
-                args: child_args,
-            };
+            if first_cor != cor_ty {
+                return Instance {
+                    def: ty::InstanceKind::FutureDropPollShim(
+                        async_drop_in_place_poll,
+                        first_cor,
+                        cor_ty,
+                    ),
+                    args: proxy_args,
+                };
+            } else {
+                return Instance {
+                    def: ty::InstanceKind::AsyncDropGlue(async_drop_in_place_poll, cor_ty),
+                    args: child_args,
+                };
+            }
         }
     }
 }
@@ -734,9 +749,13 @@ impl<'tcx> Instance<'tcx> {
         Instance::expect_resolve(tcx, ty::ParamEnv::reveal_all(), def_id, args)
     }
 
-    pub fn resolve_future_drop_poll(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> ty::Instance<'tcx> {
+    pub fn resolve_future_drop_poll(
+        tcx: TyCtxt<'tcx>,
+        ty: Ty<'tcx>,
+        impl_ty: Ty<'tcx>,
+    ) -> ty::Instance<'tcx> {
         let def_id = tcx.require_lang_item(LangItem::FutureDropPoll, None);
-        let args = tcx.mk_args(&[ty.into()]);
+        let args = tcx.mk_args(&[ty.into(), impl_ty.into()]);
         Instance::expect_resolve(tcx, ty::ParamEnv::reveal_all(), def_id, args)
     }
 

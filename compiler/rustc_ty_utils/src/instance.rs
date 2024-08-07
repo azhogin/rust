@@ -80,17 +80,14 @@ fn resolve_instance<'tcx>(
                     _ => return Ok(None),
                 }
                 debug!(" => nontrivial async drop glue ctor");
-                ty::InstanceKind::AsyncDropGlueCtorShim(def_id, Some(ty))
+                ty::InstanceKind::AsyncDropGlueCtorShim(def_id, ty)
             } else {
                 debug!(" => trivial async drop glue ctor");
-                ty::InstanceKind::AsyncDropGlueCtorShim(def_id, None)
+                ty::InstanceKind::AsyncDropGlueCtorShim(def_id, ty)
             }
         } else if tcx.is_lang_item(def_id, LangItem::AsyncDropInPlacePoll) {
             let ty = args.type_at(0);
             ty::InstanceKind::AsyncDropGlue(def_id, ty)
-        } else if tcx.is_lang_item(def_id, LangItem::FutureDropPoll) {
-            let ty = args.type_at(0);
-            ty::InstanceKind::FutureDropPollShim(def_id, ty)
         } else {
             debug!(" => free item");
             // FIXME(effects): we may want to erase the effect param if that is present on this item.

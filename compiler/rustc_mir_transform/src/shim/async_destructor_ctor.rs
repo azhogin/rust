@@ -11,8 +11,11 @@ use rustc_middle::mir::{
 use rustc_middle::ty::{self, EarlyBinder, Ty, TyCtxt};
 use rustc_mir_dataflow::elaborate_drops;
 
-// For coroutine, its async drop function layout is the coroutine layout itself, so
-// in async destructor ctor function we just return coroutine argument as a return value.
+// For coroutine, its async drop function layout is proxy with impl coroutine layout ref, so
+// in async destructor ctor function we create
+// `async_drop_in_place(*ImplCoroutine) { return ProxyCoroutine { &*ImplCoroutine } }`.
+// In case of `async_drop_in_place<async_drop_in_place<ImplCoroutine>::{{closure}}>` (and further),
+// we need to take impl coroutine ref from arg proxy layout and copy its to the new proxy layout
 pub fn build_async_destructor_ctor_shim_for_coroutine<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
@@ -32,36 +35,100 @@ pub fn build_async_destructor_ctor_shim_for_coroutine<'tcx>(
     let source_info = SourceInfo::outermost(span);
 
     debug_assert_eq!(sig.inputs().len(), INPUT_COUNT);
-    let locals = local_decls_for_sig(&sig, span);
+    let mut locals = local_decls_for_sig(&sig, span);
+
+    let cor_def_id = tcx.lang_items().async_drop_in_place_poll_fn().unwrap();
+
+    let mut statements = Vec::new();
+    let mut dropee_ptr = Place::from(first_arg);
+    if tcx.sess.opts.unstable_opts.mir_emit_retag {
+        let reborrow = Rvalue::Ref(
+            tcx.lifetimes.re_erased,
+            BorrowKind::Mut { kind: MutBorrowKind::Default },
+            tcx.mk_place_deref(dropee_ptr),
+        );
+        let ref_ty = Ty::new_mut_ref(tcx, tcx.lifetimes.re_erased, ty);
+        dropee_ptr = locals.push(LocalDecl::new(ref_ty, span)).into();
+        statements.push(Statement {
+            source_info,
+            kind: StatementKind::Assign(Box::new((dropee_ptr, reborrow))),
+        });
+        statements.push(Statement {
+            source_info,
+            kind: StatementKind::Retag(RetagKind::FnEntry, Box::new(dropee_ptr)),
+        });
+    }
+
+    // if arg layout is a proxy layout, we need to take its ref field for final impl coroutine
+    fn find_impl_coroutine<'tcx>(tcx: TyCtxt<'tcx>, mut cor_ty: Ty<'tcx>) -> Ty<'tcx> {
+        let mut ty = cor_ty;
+        loop {
+            if let ty::Coroutine(def_id, args) = ty.kind() {
+                cor_ty = ty;
+                if tcx.is_templated_coroutine(*def_id) {
+                    ty = args.first().unwrap().expect_ty();
+                    continue;
+                } else {
+                    return cor_ty;
+                }
+            } else {
+                return cor_ty;
+            }
+        }
+    }
+    let impl_cor_ty = find_impl_coroutine(tcx, ty);
+    if impl_cor_ty != ty {
+        dropee_ptr = dropee_ptr
+            .project_deeper(&[PlaceElem::Deref, PlaceElem::Field(FieldIdx::ZERO, ty)], tcx);
+    }
+
+    let resume_adt = tcx.adt_def(tcx.require_lang_item(LangItem::ResumeTy, None));
+    let resume_ty = Ty::new_adt(tcx, resume_adt, ty::List::empty());
+
+    let cor_args = ty::CoroutineArgs::new(
+        tcx,
+        ty::CoroutineArgsParts {
+            parent_args: args,
+            kind_ty: tcx.types.unit,
+            resume_ty,
+            yield_ty: tcx.types.unit,
+            return_ty: tcx.types.unit,
+            witness: Ty::new_coroutine_witness(tcx, cor_def_id, args),
+            tupled_upvars_ty: Ty::new_tup(tcx, &[Ty::new_mut_ptr(tcx, ty)]),
+        },
+    )
+    .args;
 
     let mut blocks = IndexVec::with_capacity(1);
-    let assign = Statement {
+    statements.push(Statement {
         source_info,
         kind: StatementKind::Assign(Box::new((
             Place::return_place(),
-            Rvalue::Use(Operand::Move(tcx.mk_place_deref(Place::from(first_arg)))),
+            Rvalue::Aggregate(
+                Box::new(AggregateKind::Coroutine(cor_def_id, cor_args)),
+                [Operand::Move(dropee_ptr)].into(),
+            ),
         ))),
-    };
+    });
     blocks.push(BasicBlockData {
-        statements: vec![assign],
+        statements,
         terminator: Some(Terminator { source_info, kind: TerminatorKind::Return }),
         is_cleanup: false,
     });
 
-    let source =
-        MirSource::from_instance(ty::InstanceKind::AsyncDropGlueCtorShim(def_id, Some(ty)));
+    let source = MirSource::from_instance(ty::InstanceKind::AsyncDropGlueCtorShim(def_id, ty));
     new_body(source, blocks, locals, sig.inputs().len(), span)
 }
 
 pub fn build_async_destructor_ctor_shim<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-    ty: Option<Ty<'tcx>>,
+    ty: Ty<'tcx>,
 ) -> Body<'tcx> {
     debug!("build_async_destructor_ctor_shim(def_id={:?}, ty={:?})", def_id, ty);
 
-    if matches!(ty, Some(ty) if ty.is_coroutine()) {
-        build_async_destructor_ctor_shim_for_coroutine(tcx, def_id, ty.unwrap())
+    if ty.is_coroutine() {
+        build_async_destructor_ctor_shim_for_coroutine(tcx, def_id, ty)
     } else {
         build_async_destructor_ctor_shim_not_coroutine(tcx, def_id, ty)
     }
@@ -70,15 +137,11 @@ pub fn build_async_destructor_ctor_shim<'tcx>(
 pub fn build_async_destructor_ctor_shim_not_coroutine<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-    ty: Option<Ty<'tcx>>,
+    ty: Ty<'tcx>,
 ) -> Body<'tcx> {
     debug_assert_eq!(Some(def_id), tcx.lang_items().async_drop_in_place_fn());
     let generic_body = tcx.optimized_mir(def_id);
-    let args = if let Some(ty) = ty {
-        tcx.mk_args(&[ty.into()])
-    } else {
-        GenericArgs::identity_for_item(tcx, def_id)
-    };
+    let args = tcx.mk_args(&[ty.into()]);
     EarlyBinder::bind(generic_body.clone()).instantiate(tcx, args)
 }
 
@@ -101,6 +164,9 @@ pub fn build_async_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Ty<'tcx
         CoroutineKind::Desugared(CoroutineDesugaring::Async, CoroutineSource::Fn)
     ));
 
+    let needs_async_drop = drop_ty.needs_async_drop(tcx, param_env);
+    let needs_sync_drop = !needs_async_drop && drop_ty.needs_drop(tcx, param_env);
+
     let resume_adt = tcx.adt_def(tcx.require_lang_item(LangItem::ResumeTy, None));
     let resume_ty = Ty::new_adt(tcx, resume_adt, ty::List::empty());
 
@@ -117,9 +183,6 @@ pub fn build_async_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Ty<'tcx
     let span = tcx.def_span(def_id);
     let source_info = SourceInfo::outermost(span);
 
-    let needs_async_drop = drop_ty.needs_async_drop(tcx, param_env);
-    let needs_sync_drop = !needs_async_drop && drop_ty.needs_drop(tcx, param_env);
-
     // The first argument (index 0), but add 1 for the return value.
     let coroutine_layout = Place::from(Local::new(1 + 0));
     let coroutine_layout_dropee =
@@ -134,18 +197,21 @@ pub fn build_async_drop_shim<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, ty: Ty<'tcx
             is_cleanup: false,
         })
     };
-    block(&mut blocks, if needs_sync_drop {
-        TerminatorKind::Drop {
-            place: tcx.mk_place_deref(coroutine_layout_dropee),
-            target: return_block,
-            unwind: UnwindAction::Continue,
-            replace: false,
-            drop: None,
-            async_fut: None
-        }
-    } else {
-        TerminatorKind::Goto { target: return_block }
-    });
+    block(
+        &mut blocks,
+        if needs_sync_drop {
+            TerminatorKind::Drop {
+                place: tcx.mk_place_deref(coroutine_layout_dropee),
+                target: return_block,
+                unwind: UnwindAction::Continue,
+                replace: false,
+                drop: None,
+                async_fut: None,
+            }
+        } else {
+            TerminatorKind::Goto { target: return_block }
+        },
+    );
     block(&mut blocks, TerminatorKind::Return);
 
     let source = MirSource::from_instance(ty::InstanceKind::AsyncDropGlue(def_id, ty));

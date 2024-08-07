@@ -42,23 +42,6 @@ pub trait AsyncDrop {
     async fn drop(self: Pin<&mut Self>);
 }
 
-/// Async drop of coroutine.
-/// Coroutine with internal async drops will have its own drop function in async form.
-/// And required to be polled in loop.
-#[cfg(not(bootstrap))]
-#[unstable(feature = "async_drop", issue = "126482")]
-#[lang = "future_drop_poll"]
-#[allow(unconditional_recursion)]
-pub fn future_drop_poll<F>(fut: Pin<&mut F>, cx: &mut Context<'_>) -> Poll<()>
-where
-    F: Future,
-{
-    // Code here does not matter - this is replaced by the
-    // real implementation by the compiler.
-
-    future_drop_poll(fut, cx)
-}
-
 /// Async drop.
 #[cfg(not(bootstrap))]
 #[unstable(feature = "async_drop", issue = "126482")]

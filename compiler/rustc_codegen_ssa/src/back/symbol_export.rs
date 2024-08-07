@@ -366,7 +366,7 @@ fn exported_symbols_provider_local(
                     ));
                 }
                 MonoItem::Fn(Instance {
-                    def: InstanceKind::AsyncDropGlueCtorShim(def_id, Some(ty)),
+                    def: InstanceKind::AsyncDropGlueCtorShim(def_id, ty),
                     args,
                 }) => {
                     // A little sanity-check
@@ -417,7 +417,6 @@ fn upstream_monomorphizations_provider(
     let drop_in_place_fn_def_id = tcx.lang_items().drop_in_place_fn();
     let async_drop_in_place_fn_def_id = tcx.lang_items().async_drop_in_place_fn();
     let async_drop_in_place_poll_fn_def_id = tcx.lang_items().async_drop_in_place_poll_fn();
-    let future_drop_poll_fn_def_id = tcx.lang_items().future_drop_poll_fn();
 
     for &cnum in cnums.iter() {
         for (exported_symbol, _) in tcx.exported_symbols(cnum).iter() {
@@ -441,13 +440,6 @@ fn upstream_monomorphizations_provider(
                 }
                 ExportedSymbol::AsyncDropGlue(ty) => {
                     if let Some(poll_fn_def_id) = async_drop_in_place_poll_fn_def_id {
-                        (poll_fn_def_id, tcx.mk_args(&[ty.into()]))
-                    } else {
-                        continue;
-                    }
-                }
-                ExportedSymbol::FutureDropPoll(ty) => {
-                    if let Some(poll_fn_def_id) = future_drop_poll_fn_def_id {
                         (poll_fn_def_id, tcx.mk_args(&[ty.into()]))
                     } else {
                         continue;
@@ -608,13 +600,6 @@ pub fn symbol_name_for_instance_in_crate<'tcx>(
                 instantiating_crate,
             )
         }
-        ExportedSymbol::FutureDropPoll(ty) => {
-            rustc_symbol_mangling::symbol_name_for_instance_in_crate(
-                tcx,
-                Instance::resolve_future_drop_poll(tcx, ty),
-                instantiating_crate,
-            )
-        }
         ExportedSymbol::NoDefId(symbol_name) => symbol_name.to_string(),
     }
 }
@@ -667,7 +652,6 @@ pub fn linking_symbol_name_for_instance_in_crate<'tcx>(
         // target's default symbol decoration scheme.
         ExportedSymbol::AsyncDropGlueCtorShim(..) => None,
         ExportedSymbol::AsyncDropGlue(..) => None,
-        ExportedSymbol::FutureDropPoll(..) => None,
         // NoDefId always follow the target's default symbol decoration scheme.
         ExportedSymbol::NoDefId(..) => None,
         // ThreadLocalShim always follow the target's default symbol decoration scheme.

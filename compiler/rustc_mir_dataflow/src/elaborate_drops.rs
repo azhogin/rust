@@ -2,12 +2,12 @@ use rustc_hir::lang_items::LangItem;
 use rustc_index::Idx;
 use rustc_middle::mir::patch::MirPatch;
 use rustc_middle::mir::*;
-use rustc_middle::span_bug;
 use rustc_middle::traits;
 use rustc_middle::traits::Reveal;
 use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::ty::{GenericArg, GenericArgsRef};
+use rustc_middle::{bug, span_bug};
 use rustc_span::source_map::{dummy_spanned, Spanned};
 use rustc_span::DUMMY_SP;
 use rustc_target::abi::{FieldIdx, VariantIdx, FIRST_VARIANT};
@@ -301,7 +301,7 @@ where
         let pin_obj_ty = pin_obj_new_unchecked_fn.fn_sig(tcx).output().no_bound_vars().unwrap();
         let pin_obj_place = Place::from(self.new_temp(pin_obj_ty));
         let pin_obj_new_unchecked_fn = Operand::Constant(Box::new(ConstOperand {
-            span: span,
+            span,
             user_ty: None,
             const_: Const::zero_sized(pin_obj_new_unchecked_fn),
         }));
@@ -320,12 +320,37 @@ where
         );
 
         // #2:call_drop_bb
-        let call_drop_bb = self.new_block(
+        let mut call_statements = Vec::new();
+        let drop_arg = if call_destructor_only {
+            pin_obj_place
+        } else {
+            let ty::Adt(adt_def, adt_args) = pin_obj_ty.kind() else {
+                bug!();
+            };
+            let obj_ptr_ty = Ty::new_mut_ptr(tcx, drop_ty);
+            let obj_ptr_place = Place::from(self.new_temp(obj_ptr_ty));
+            let unwrap_ty = adt_def.non_enum_variant().fields[FieldIdx::ZERO].ty(tcx, adt_args);
+            let addr = Rvalue::AddressOf(
+                Mutability::Mut,
+                pin_obj_place.project_deeper(
+                    &[ProjectionElem::Field(FieldIdx::ZERO, unwrap_ty), ProjectionElem::Deref],
+                    tcx,
+                ),
+            );
+            call_statements.push(self.assign(obj_ptr_place, addr));
+            obj_ptr_place
+        };
+        call_statements.push(Statement {
+            source_info: self.source_info,
+            kind: StatementKind::StorageLive(fut.local),
+        });
+
+        let call_drop_bb = self.new_block_with_statements(
             unwind,
+            call_statements,
             TerminatorKind::Call {
                 func: Operand::function_handle(tcx, drop_fn_def_id, trait_args, span),
-                args: [Spanned { node: Operand::Move(Place::from(pin_obj_place)), span: DUMMY_SP }]
-                    .into(),
+                args: [Spanned { node: Operand::Move(drop_arg), span: DUMMY_SP }].into(),
                 destination: fut,
                 target: Some(drop_term_bb),
                 unwind: unwind.into_action(),
@@ -381,7 +406,7 @@ where
                     target: self.succ,
                     unwind: self.unwind.into_action(),
                     replace: false,
-                    drop: self.dropline,
+                    drop: None,
                     async_fut: None,
                 },
             );
@@ -1232,7 +1257,7 @@ where
                 target,
                 unwind: unwind.into_action(),
                 replace: false,
-                drop: self.dropline,
+                drop: None,
                 async_fut: None,
             };
             self.new_block(unwind, block)
@@ -1275,6 +1300,19 @@ where
     fn new_block(&mut self, unwind: Unwind, k: TerminatorKind<'tcx>) -> BasicBlock {
         self.elaborator.patch().new_block(BasicBlockData {
             statements: vec![],
+            terminator: Some(Terminator { source_info: self.source_info, kind: k }),
+            is_cleanup: unwind.is_cleanup(),
+        })
+    }
+
+    fn new_block_with_statements(
+        &mut self,
+        unwind: Unwind,
+        statements: Vec<Statement<'tcx>>,
+        k: TerminatorKind<'tcx>,
+    ) -> BasicBlock {
+        self.elaborator.patch().new_block(BasicBlockData {
+            statements,
             terminator: Some(Terminator { source_info: self.source_info, kind: k }),
             is_cleanup: unwind.is_cleanup(),
         })

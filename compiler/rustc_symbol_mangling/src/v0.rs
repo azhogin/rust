@@ -51,7 +51,7 @@ pub(super) fn mangle<'tcx>(
 
         ty::InstanceKind::ConstructCoroutineInClosureShim { .. }
         | ty::InstanceKind::CoroutineKindShim { .. } => Some("fn_once"),
-        ty::InstanceKind::FutureDropPollShim(_, _) => Some("drop"),
+        ty::InstanceKind::FutureDropPollShim(_, _, _) => Some("drop"),
         _ => None,
     };
 

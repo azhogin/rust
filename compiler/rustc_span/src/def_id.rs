@@ -300,9 +300,13 @@ impl DefId {
     #[inline]
     #[track_caller]
     pub fn expect_local_or_templated<F>(self, is_templated: F) -> DefId
-    where F: FnOnce(DefId) -> bool {
-        assert!(self.is_local() || is_templated(self),
-            "DefId::expect_local_or_templated: `{self:?}` isn't local or templated");
+    where
+        F: FnOnce(DefId) -> bool,
+    {
+        assert!(
+            self.is_local() || is_templated(self),
+            "DefId::expect_local_or_templated: `{self:?}` isn't local or templated"
+        );
         self
     }
 

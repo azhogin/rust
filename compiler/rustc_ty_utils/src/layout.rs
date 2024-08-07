@@ -21,6 +21,7 @@ use tracing::{debug, instrument, trace};
 
 use std::fmt::Debug;
 use std::iter;
+use std::ops::Bound;
 
 use crate::errors::{
     MultipleArrayFieldsSimdType, NonPrimitiveSimdType, OversizedSimdType, ZeroLengthSimdType,
@@ -112,16 +113,60 @@ fn layout_of_uncached<'tcx>(
     if let Err(guar) = ty.error_reported() {
         return Err(error(cx, LayoutError::ReferencesError(guar)));
     }
+    let tcx = cx.tcx;
+
     // layout of `async_drop_in_place<T>::{closure}` in case,
-    // when T is a coroutine, is the layout of this internal coroutine
-    if let ty::Coroutine(cor_def, cor_args) = ty.kind() && cx.tcx.is_templated_coroutine(*cor_def) {
+    // when T is a coroutine, contains this internal coroutine's ref
+    if let ty::Coroutine(cor_def, cor_args) = ty.kind()
+        && tcx.is_templated_coroutine(*cor_def)
+    {
         let arg_cor_ty = cor_args.first().unwrap().expect_ty();
         if arg_cor_ty.is_coroutine() {
-            return Ok(cx.layout_of(arg_cor_ty)?.layout);
+            fn find_impl_coroutine<'tcx>(tcx: TyCtxt<'tcx>, mut cor_ty: Ty<'tcx>) -> Ty<'tcx> {
+                let mut ty = cor_ty;
+                loop {
+                    if let ty::Coroutine(def_id, args) = ty.kind() {
+                        cor_ty = ty;
+                        if tcx.is_templated_coroutine(*def_id) {
+                            ty = args.first().unwrap().expect_ty();
+                            continue;
+                        } else {
+                            return cor_ty;
+                        }
+                    } else {
+                        return cor_ty;
+                    }
+                }
+            }
+            let repr = ReprOptions {
+                int: None,
+                align: None,
+                pack: None,
+                flags: ReprFlags::empty(),
+                field_shuffle_seed: 0,
+            };
+            let impl_cor = find_impl_coroutine(tcx, arg_cor_ty);
+            let impl_ref = Ty::new_mut_ref(tcx, tcx.lifetimes.re_erased, impl_cor);
+            let ref_layout = cx.layout_of(impl_ref)?.layout;
+            let variants: IndexVec<VariantIdx, IndexVec<FieldIdx, Layout<'tcx>>> =
+                [IndexVec::from([ref_layout])].into();
+            let Some(layout) = cx.layout_of_struct_or_enum(
+                &repr,
+                &variants,
+                false,
+                false,
+                (Bound::Unbounded, Bound::Unbounded),
+                |_, _| (Integer::I128, false),
+                None::<(VariantIdx, i128)>.into_iter(),
+                false,
+                true,
+            ) else {
+                return Err(error(cx, LayoutError::SizeOverflow(ty)));
+            };
+            return Ok(tcx.mk_layout(layout));
         }
     }
 
-    let tcx = cx.tcx;
     let param_env = cx.param_env;
     let dl = cx.data_layout();
     let scalar_unit = |value: Primitive| {
@@ -824,7 +869,7 @@ fn coroutine_layout<'tcx>(
     let tcx = cx.tcx;
     let layout = if tcx.is_templated_coroutine(def_id) {
         // layout of `async_drop_in_place<T>::{closure}` in case,
-        // when T is a coroutine, is the layout of this internal coroutine,
+        // when T is a coroutine, contains this internal coroutine's ref
         // and must be proceed above, in layout_of_uncached
         assert!(!args.first().unwrap().expect_ty().is_coroutine());
         tcx.templated_coroutine_layout(ty)

@@ -204,6 +204,7 @@ fn replace_base<'tcx>(place: &mut Place<'tcx>, new_base: Place<'tcx>, tcx: TyCtx
 }
 
 const SELF_ARG: Local = Local::from_u32(1);
+const CTX_ARG: Local = Local::from_u32(2);
 
 /// Coroutine has not been resumed yet.
 const UNRESUMED: usize = CoroutineArgs::UNRESUMED;
@@ -637,7 +638,7 @@ fn make_coroutine_state_argument_pinned<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body
 ///
 /// Note that the new local will be uninitialized. It is the caller's responsibility to assign some
 /// valid value to it before its first use.
-fn replace_local<'tcx>(
+pub fn replace_local<'tcx>(
     local: Local,
     ty: Ty<'tcx>,
     body: &mut Body<'tcx>,
@@ -677,7 +678,7 @@ fn transform_async_context<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> Ty
     let context_mut_ref = Ty::new_task_context(tcx);
 
     // replace the type of the `resume` argument
-    replace_resume_ty_local(tcx, body, Local::new(2), context_mut_ref);
+    replace_resume_ty_local(tcx, body, CTX_ARG, context_mut_ref);
 
     let get_context_def_id = tcx.require_lang_item(LangItem::GetContext, None);
 
@@ -718,10 +719,8 @@ fn build_poll_call<'tcx>(
     fut_ty: Ty<'tcx>,
     context_ref_place: &Place<'tcx>,
     unwind: UnwindAction,
-    is_coroutine_drop: bool,
 ) -> BasicBlock {
-    let lang_item = if is_coroutine_drop { LangItem::FutureDropPoll } else { LangItem::FuturePoll };
-    let poll_fn = tcx.require_lang_item(lang_item, None);
+    let poll_fn = tcx.require_lang_item(LangItem::FuturePoll, None);
     let poll_fn = Ty::new_fn_def(tcx, poll_fn, [fut_ty]);
     let poll_fn = Operand::Constant(Box::new(ConstOperand {
         span: DUMMY_SP,
@@ -737,7 +736,7 @@ fn build_poll_call<'tcx>(
         .into(),
         destination: *poll_unit_place,
         target: Some(switch_block),
-        unwind: unwind,
+        unwind,
         call_source: CallSource::Misc,
         fn_span: DUMMY_SP,
     };
@@ -764,10 +763,13 @@ fn build_pin_fut<'tcx>(
     let fut_pin_ty = pin_fut_new_unchecked_fn.fn_sig(tcx).output().skip_binder();
     let fut_pin_place = Place::from(body.local_decls.push(LocalDecl::new(fut_pin_ty, span)));
     let pin_fut_new_unchecked_fn = Operand::Constant(Box::new(ConstOperand {
-        span: span,
+        span,
         user_ty: None,
         const_: Const::zero_sized(pin_fut_new_unchecked_fn),
     }));
+
+    let storage_live =
+        Statement { source_info, kind: StatementKind::StorageLive(fut_pin_place.local) };
 
     let fut_ref_assign = Statement {
         source_info,
@@ -783,7 +785,7 @@ fn build_pin_fut<'tcx>(
 
     // call Pin<FutTy>::new_unchecked(&mut fut)
     let pin_fut_bb = body.basic_blocks_mut().push(BasicBlockData {
-        statements: [fut_ref_assign].to_vec(),
+        statements: [storage_live, fut_ref_assign].to_vec(),
         terminator: Some(Terminator {
             source_info,
             kind: TerminatorKind::Call {
@@ -919,16 +921,7 @@ fn has_expandable_async_drops<'tcx>(
         if place_ty == coroutine_ty {
             continue;
         }
-        let is_async = async_fut.is_some() || if let ty::Coroutine(def_id, ..) = place_ty.kind() {
-            if tcx.is_templated_coroutine(*def_id)
-                || tcx.optimized_mir(def_id).coroutine_drop_async().is_some()
-            {
-                true
-            } else {
-                false
-            }
-        } else { false };
-        if !is_async {
+        if async_fut.is_none() {
             continue;
         }
         return true;
@@ -978,19 +971,7 @@ fn expand_async_drops<'tcx>(
             continue;
         }
 
-        let (fut_local, is_coroutine_drop) = if let Some(fut_local) = async_fut {
-            (fut_local, false)
-        } else if let ty::Coroutine(def_id, ..) = place_ty.kind() {
-            if tcx.is_templated_coroutine(*def_id)
-                || tcx.optimized_mir(def_id).coroutine_drop_async().is_some()
-            {
-                // Coroutine is async dropped using its original state struct
-                (place.local, true)
-            } else {
-                remove_asyncness(&mut body[bb]);
-                continue;
-            }
-        } else {
+        let Some(fut_local) = async_fut else {
             remove_asyncness(&mut body[bb]);
             continue;
         };
@@ -1022,6 +1003,12 @@ fn expand_async_drops<'tcx>(
         // First state-loop yield for mainline
         let context_ref_place =
             Place::from(body.local_decls.push(LocalDecl::new(context_mut_ref, body.span)));
+        let source_info = body[bb].terminator.as_ref().unwrap().source_info;
+        let arg = Rvalue::Use(Operand::Move(Place::from(CTX_ARG)));
+        body[bb].statements.push(Statement {
+            source_info,
+            kind: StatementKind::Assign(Box::new((context_ref_place, arg))),
+        });
         let yield_block = insert_term_block(body, TerminatorKind::Unreachable); // `kind` replaced later to yield
         let switch_block =
             build_poll_switch(tcx, body, poll_enum, &poll_unit_place, target, yield_block);
@@ -1036,7 +1023,6 @@ fn expand_async_drops<'tcx>(
             fut_ty,
             &context_ref_place,
             unwind,
-            is_coroutine_drop,
         );
 
         // Second state-loop yield for transition to dropline (when coroutine async drop started)
@@ -1067,7 +1053,6 @@ fn expand_async_drops<'tcx>(
                 fut_ty,
                 &context_ref_place2,
                 unwind,
-                is_coroutine_drop,
             );
             dropline_transition_bb = Some(pin_bb2);
             dropline_yield_bb = Some(drop_yield_block);
@@ -1825,8 +1810,11 @@ fn create_coroutine_drop_shim_async<'tcx>(
 
     // Update the body's def to become the drop glue.
     let coroutine_instance = body.source.instance;
-    let drop_poll = tcx.require_lang_item(LangItem::FutureDropPoll, None);
-    let drop_instance = InstanceKind::FutureDropPollShim(drop_poll, coroutine_ty);
+    let drop_instance = InstanceKind::FutureDropPollShim(
+        tcx.lang_items().async_drop_in_place_poll_fn().unwrap(),
+        coroutine_ty,
+        coroutine_ty,
+    );
 
     // Temporary change MirSource to coroutine's instance so that dump_mir produces more sensible
     // filename.
@@ -1883,8 +1871,11 @@ fn create_coroutine_drop_shim_proxy_async<'tcx>(
     body.basic_blocks_mut()[call_bb].terminator = Some(Terminator { source_info, kind });
 
     let coroutine_instance = body.source.instance;
-    let drop_poll = tcx.require_lang_item(LangItem::FutureDropPoll, None);
-    let drop_instance = InstanceKind::FutureDropPollShim(drop_poll, coroutine_ty);
+    let drop_instance = InstanceKind::FutureDropPollShim(
+        tcx.lang_items().async_drop_in_place_poll_fn().unwrap(),
+        coroutine_ty,
+        coroutine_ty,
+    );
 
     // Temporary change MirSource to coroutine's instance so that dump_mir produces more sensible
     // filename.
@@ -2197,7 +2188,7 @@ fn create_cases<'tcx>(
 
                 if operation == Operation::Resume {
                     // Move the resume argument to the destination place of the `Yield` terminator
-                    let resume_arg = Local::new(2); // 0 = return, 1 = self
+                    let resume_arg = CTX_ARG;
                     statements.push(Statement {
                         source_info,
                         kind: StatementKind::Assign(Box::new((
@@ -2376,7 +2367,7 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         // This is needed because the resume argument `_2` might be live across a `yield`, in which
         // case there is no `Assign` to it that the transform can turn into a store to the coroutine
         // state. After the yield the slot in the coroutine state would then be uninitialized.
-        let resume_local = Local::new(2);
+        let resume_local = CTX_ARG;
         let resume_ty = body.local_decls[resume_local].ty;
         let old_resume_local = replace_local(resume_local, resume_ty, body, tcx);
 

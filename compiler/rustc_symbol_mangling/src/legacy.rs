@@ -58,7 +58,7 @@ pub(super) fn mangle<'tcx>(
             def_id,
             if let ty::InstanceKind::DropGlue(_, _)
             | ty::InstanceKind::AsyncDropGlueCtorShim(_, _)
-            | ty::InstanceKind::FutureDropPollShim(_, _) = instance.def
+            | ty::InstanceKind::FutureDropPollShim(_, _, _) = instance.def
             {
                 // Add the name of the dropped type to the symbol name
                 &*instance.args

@@ -15,13 +15,11 @@ fn myprintln(msg: &str, my_resource_handle: usize) {
 }
 
 use std::{
-    future::{Future, AsyncDrop},
+    future::{Future, async_drop_in_place, AsyncDrop},
     pin::{pin, Pin},
     sync::{mpsc, Arc},
     task::{Context, Poll, Wake, Waker},
 };
-
-use std::future::future_drop_poll;
 
 struct Foo {
     my_resource_handle: usize,
@@ -86,10 +84,11 @@ where
             Poll::Pending => rx.try_recv().unwrap(),
         }
     };
+    let drop_fut_unpin = unsafe { async_drop_in_place(fut.get_unchecked_mut()) };
+    let mut drop_fut: Pin<&mut _> = pin!(drop_fut_unpin);
     loop {
-        match future_drop_poll(fut.as_mut(), &mut context) {
+        match drop_fut.as_mut().poll(&mut context) {
             Poll::Ready(()) => break,
-            // expect wake in polls
             Poll::Pending => rx.try_recv().unwrap(),
         }
     }

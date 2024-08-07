@@ -19,7 +19,7 @@ pub use self::IntVarValue::*;
 use crate::error::{OpaqueHiddenTypeMismatch, TypeMismatchReason};
 use crate::metadata::ModChild;
 use crate::middle::privacy::EffectiveVisibilities;
-use crate::mir::{Body, CoroutineLayout};
+use crate::mir::{Body, CoroutineLayout, CoroutineSavedLocal, CoroutineSavedTy, SourceInfo};
 use crate::query::{Key, Providers};
 use crate::traits::{self, Reveal};
 use crate::ty;
@@ -45,6 +45,7 @@ use rustc_errors::{Diag, ErrorGuaranteed, StashKey};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, DocLinkResMap, LifetimeRes, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, LocalDefIdMap};
+use rustc_index::bit_set::BitMatrix;
 use rustc_index::IndexVec;
 use rustc_macros::{
     extension, Decodable, Encodable, HashStable, TyDecodable, TyEncodable, TypeFoldable,
@@ -1882,15 +1883,43 @@ impl<'tcx> TyCtxt<'tcx> {
         args: GenericArgsRef<'tcx>,
     ) -> Option<&'tcx CoroutineLayout<'tcx>> {
         if Some(def_id) == self.lang_items().async_drop_in_place_poll_fn() {
-            // layout of `async_drop_in_place<T>::{closure}` in case,
-            // when T is a coroutine, is the layout of this internal coroutine
-            let arg_cor_ty = args.first().unwrap().expect_ty();
-            if let ty::Coroutine(child_def_id, _) = arg_cor_ty.kind() {
-                if arg_cor_ty.is_templated_coroutine(self) {
-                    self.templated_coroutine_layout(arg_cor_ty)
-                } else {
-                    self.ordinary_coroutine_layout(*child_def_id, args.as_coroutine().kind_ty())
+            fn find_impl_coroutine<'tcx>(tcx: TyCtxt<'tcx>, mut cor_ty: Ty<'tcx>) -> Ty<'tcx> {
+                let mut ty = cor_ty;
+                loop {
+                    if let ty::Coroutine(def_id, args) = ty.kind() {
+                        cor_ty = ty;
+                        if tcx.is_templated_coroutine(*def_id) {
+                            ty = args.first().unwrap().expect_ty();
+                            continue;
+                        } else {
+                            return cor_ty;
+                        }
+                    } else {
+                        return cor_ty;
+                    }
                 }
+            }
+            // layout of `async_drop_in_place<T>::{closure}` in case,
+            // when T is a coroutine, contains this internal coroutine's ref
+            let arg_cor_ty = args.first().unwrap().expect_ty();
+            if arg_cor_ty.is_coroutine() {
+                let impl_cor_ty = find_impl_coroutine(self, arg_cor_ty);
+                let impl_ref = Ty::new_mut_ref(self, self.lifetimes.re_static, impl_cor_ty);
+                let span = self.def_span(def_id);
+                let source_info = SourceInfo::outermost(span);
+                let proxy_layout = CoroutineLayout {
+                    field_tys: [CoroutineSavedTy {
+                        ty: impl_ref,
+                        source_info,
+                        ignore_for_traits: true,
+                    }]
+                    .into(),
+                    field_names: [None].into(),
+                    variant_fields: [IndexVec::from([CoroutineSavedLocal::ZERO])].into(),
+                    variant_source_info: [source_info].into(),
+                    storage_conflicts: BitMatrix::new(1, 1),
+                };
+                return Some(self.arena.alloc(proxy_layout));
             } else {
                 self.templated_coroutine_layout(Ty::new_coroutine(self, def_id, args))
             }

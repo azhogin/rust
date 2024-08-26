@@ -195,6 +195,16 @@ impl<O> AssertKind<O> {
             ResumedAfterPanic(CoroutineKind::Desugared(CoroutineDesugaring::Gen, _)) => {
                 LangItem::PanicGenFnNonePanic
             }
+            ResumedAfterDrop(CoroutineKind::Coroutine(_)) => LangItem::PanicCoroutineResumedDrop,
+            ResumedAfterDrop(CoroutineKind::Desugared(CoroutineDesugaring::Async, _)) => {
+                LangItem::PanicAsyncFnResumedDrop
+            }
+            ResumedAfterDrop(CoroutineKind::Desugared(CoroutineDesugaring::AsyncGen, _)) => {
+                LangItem::PanicAsyncGenFnResumedDrop
+            }
+            ResumedAfterDrop(CoroutineKind::Desugared(CoroutineDesugaring::Gen, _)) => {
+                LangItem::PanicGenFnNoneDrop
+            }
 
             BoundsCheck { .. } | MisalignedPointerDereference { .. } => {
                 bug!("Unexpected AssertKind")
@@ -284,6 +294,18 @@ impl<O> AssertKind<O> {
             ResumedAfterPanic(CoroutineKind::Desugared(CoroutineDesugaring::Gen, _)) => {
                 write!(f, "\"`gen fn` should just keep returning `None` after panicking\"")
             }
+            ResumedAfterDrop(CoroutineKind::Coroutine(_)) => {
+                write!(f, "\"coroutine resumed after async drop\"")
+            }
+            ResumedAfterDrop(CoroutineKind::Desugared(CoroutineDesugaring::Async, _)) => {
+                write!(f, "\"`async fn` resumed after async drop\"")
+            }
+            ResumedAfterDrop(CoroutineKind::Desugared(CoroutineDesugaring::AsyncGen, _)) => {
+                write!(f, "\"`async gen fn` resumed after async drop\"")
+            }
+            ResumedAfterDrop(CoroutineKind::Desugared(CoroutineDesugaring::Gen, _)) => {
+                write!(f, "\"`gen fn` resumed after drop\"")
+            }
         }
     }
 
@@ -330,6 +352,18 @@ impl<O> AssertKind<O> {
             ResumedAfterPanic(CoroutineKind::Coroutine(_)) => {
                 middle_assert_coroutine_resume_after_panic
             }
+            ResumedAfterDrop(CoroutineKind::Desugared(CoroutineDesugaring::Async, _)) => {
+                middle_assert_async_resume_after_drop
+            }
+            ResumedAfterDrop(CoroutineKind::Desugared(CoroutineDesugaring::AsyncGen, _)) => {
+                todo!()
+            }
+            ResumedAfterDrop(CoroutineKind::Desugared(CoroutineDesugaring::Gen, _)) => {
+                middle_assert_gen_resume_after_drop
+            }
+            ResumedAfterDrop(CoroutineKind::Coroutine(_)) => {
+                middle_assert_coroutine_resume_after_drop
+            }
 
             MisalignedPointerDereference { .. } => middle_assert_misaligned_ptr_deref,
         }
@@ -363,7 +397,7 @@ impl<O> AssertKind<O> {
                 add!("left", format!("{left:#?}"));
                 add!("right", format!("{right:#?}"));
             }
-            ResumedAfterReturn(_) | ResumedAfterPanic(_) => {}
+            ResumedAfterReturn(_) | ResumedAfterPanic(_) | ResumedAfterDrop(_) => {}
             MisalignedPointerDereference { required, found } => {
                 add!("required", format!("{required:#?}"));
                 add!("found", format!("{found:#?}"));

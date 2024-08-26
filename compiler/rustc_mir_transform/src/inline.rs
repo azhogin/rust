@@ -544,7 +544,15 @@ impl<'tcx> Inliner<'tcx> {
             checker.visit_basic_block_data(bb, blk);
 
             let term = blk.terminator();
-            if let TerminatorKind::Drop { ref place, target, unwind, replace: _ } = term.kind {
+            if let TerminatorKind::Drop {
+                ref place,
+                target,
+                unwind,
+                replace: _,
+                drop: _,
+                async_fut: _,
+            } = term.kind
+            {
                 work_list.push(target);
 
                 // If the place doesn't actually need dropping, treat it like a regular goto.

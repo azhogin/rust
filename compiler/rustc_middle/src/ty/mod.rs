@@ -1757,11 +1757,14 @@ impl<'tcx> TyCtxt<'tcx> {
             | ty::InstanceKind::ClosureOnceShim { .. }
             | ty::InstanceKind::ConstructCoroutineInClosureShim { .. }
             | ty::InstanceKind::CoroutineKindShim { .. }
+            | ty::InstanceKind::FutureDropPollShim(..)
             | ty::InstanceKind::DropGlue(..)
             | ty::InstanceKind::CloneShim(..)
             | ty::InstanceKind::ThreadLocalShim(..)
             | ty::InstanceKind::FnPtrAddrShim(..)
             | ty::InstanceKind::AsyncDropGlueCtorShim(..) => self.mir_shims(instance),
+            // async drop glue should be processed specifically, as a templated coroutine
+            ty::InstanceKind::AsyncDropGlue(_, _ty) => todo!(),
         }
     }
 

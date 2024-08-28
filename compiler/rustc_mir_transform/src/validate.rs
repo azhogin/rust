@@ -735,12 +735,13 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
                             // args of the coroutine. Otherwise, we prefer to use this body
                             // since we may be in the process of computing this MIR in the
                             // first place.
-                            let layout = if def_id == self.caller_body.source.def_id() {
-                                // FIXME: This is not right for async closures.
-                                self.caller_body.coroutine_layout_raw()
-                            } else {
-                                self.tcx.coroutine_layout(def_id, args.as_coroutine().kind_ty())
-                            };
+                            let layout = (def_id == self.caller_body.source.def_id())
+                                .then(
+                                    // FIXME: This is not right for async closures.
+                                    || self.caller_body.coroutine_layout_raw(),
+                                )
+                                .flatten()
+                                .or_else(|| self.tcx.coroutine_layout(def_id, args));
 
                             let Some(layout) = layout else {
                                 self.fail(

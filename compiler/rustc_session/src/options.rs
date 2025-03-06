@@ -94,7 +94,9 @@ fn tmod_push_impl(
     tmod_vals: &BTreeMap<OptionsTargetModifiers, String>,
     tmods: &mut Vec<TargetModifier>,
 ) {
-    tmods.push(TargetModifier { opt, value_name: tmod_vals.get(&opt).cloned().unwrap_or_default() })
+    if let Some(v) = tmod_vals.get(&opt) {
+        tmods.push(TargetModifier { opt, value_name: v.clone() })
+    }
 }
 
 macro_rules! tmod_push {
@@ -681,10 +683,9 @@ fn build_options<O: Default>(
                         ),
                     }
                 }
-                if let Some(tmod) = *tmod
-                    && let Some(value) = value
-                {
-                    target_modifiers.insert(tmod, value.to_string());
+                if let Some(tmod) = *tmod {
+                    let v = if let Some(v) = value { v.to_string() } else { String::new() };
+                    target_modifiers.insert(tmod, v);
                 }
             }
             None => early_dcx.early_fatal(format!("unknown {outputname} option: `{key}`")),

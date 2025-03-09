@@ -794,6 +794,7 @@ mod desc {
     pub(crate) const parse_mir_include_spans: &str =
         "either a boolean (`yes`, `no`, `on`, `off`, etc), or `nll` (default: `nll`)";
     pub(crate) const parse_align: &str = "a number that is a power of 2 between 1 and 2^29";
+    pub(crate) const parse_unsigned_char_var: &str = "one of `default`, `unsigned`, `signed`";
 }
 
 pub mod parse {
@@ -949,6 +950,16 @@ pub mod parse {
             Some("full") => FmtDebug::Full,
             Some("shallow") => FmtDebug::Shallow,
             Some("none") => FmtDebug::None,
+            _ => return false,
+        };
+        true
+    }
+
+    pub(crate) fn parse_unsigned_char_var(slot: &mut UnsignedCharVar, v: Option<&str>) -> bool {
+        *slot = match v {
+            Some("unsigned") => UnsignedCharVar::Unsigned,
+            Some("signed") => UnsignedCharVar::Signed,
+            Some("default") => UnsignedCharVar::Default,
             _ => return false,
         };
         true
@@ -2567,6 +2578,8 @@ written to standard error output)"),
         `hir-tree` (dump the raw HIR),
         `thir-tree`, `thir-flat`,
         `mir` (the MIR), or `mir-cfg` (graphviz formatted MIR)"),
+    unsigned_char: UnsignedCharVar = (UnsignedCharVar::default(), parse_unsigned_char_var, [TRACKED TARGET_MODIFIER],
+        "Make c_char type unsigned [default|signed|unsigned]"),
     unsound_mir_opts: bool = (false, parse_bool, [TRACKED],
         "enable unsound and buggy MIR optimizations (default: no)"),
     /// This name is kind of confusing: Most unstable options enable something themselves, while

@@ -102,7 +102,8 @@ mod c_char_definition {
         //   architecture defaults). As we only have a target for userspace apps so there are no
         //   special cases for L4Re below.
         //   https://github.com/rust-lang/rust/pull/132975#issuecomment-2484645240
-        if #[cfg(all(
+        if #[cfg(any(unsigned_char = "unsigned", all(
+            not(unsigned_char = "signed"),
             not(windows),
             not(target_vendor = "apple"),
             any(
@@ -118,7 +119,7 @@ mod c_char_definition {
                 target_arch = "s390x",
                 target_arch = "xtensa",
             )
-        ))] {
+        )))] {
             pub(super) type c_char = u8;
         } else {
             // On every other target, c_char is signed.

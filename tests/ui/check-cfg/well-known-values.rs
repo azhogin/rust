@@ -80,6 +80,8 @@
     //~^ WARN unexpected `cfg` condition value
     unix = "_UNEXPECTED_VALUE",
     //~^ WARN unexpected `cfg` condition value
+    unsigned_char = "_UNEXPECTED_VALUE",
+    //~^ WARN unexpected `cfg` condition value
     windows = "_UNEXPECTED_VALUE",
     //~^ WARN unexpected `cfg` condition value
     // tidy-alphabetical-end

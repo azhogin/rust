@@ -33,7 +33,8 @@ LL | #[cfg(list_all_well_known_cfgs)]
 `target_thread_local`
 `target_vendor`
 `ub_checks`
-`unix`, and `windows`
+`unix`
+`unsigned_char`, and `windows`
    = help: to expect this configuration use `--check-cfg=cfg(list_all_well_known_cfgs)`
    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg.html> for more information about checking conditional configuration
    = note: `#[warn(unexpected_cfgs)]` on by default

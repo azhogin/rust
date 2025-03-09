@@ -8,6 +8,7 @@
 //@ revisions: target_thread_local_ relocation_model_
 //@ revisions: fmt_debug_
 //@ revisions: emscripten_wasm_eh_
+//@ revisions: unsigned_char_
 
 //@ [overflow_checks_]compile-flags: --cfg overflow_checks
 //@ [debug_assertions_]compile-flags: --cfg debug_assertions
@@ -35,5 +36,6 @@
 //@ [relocation_model_]compile-flags: --cfg relocation_model="a"
 //@ [fmt_debug_]compile-flags: --cfg fmt_debug="shallow"
 //@ [emscripten_wasm_eh_]compile-flags: --cfg emscripten_wasm_eh
+//@ [unsigned_char_]compile-flags: --cfg unsigned_char="unsigned"
 
 fn main() {}
